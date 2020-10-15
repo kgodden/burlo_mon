@@ -13,82 +13,148 @@
 
 
 base    = $02
-tmp0    = base
-strptr  = base + 1   ; Holds address string buf for printing
-addr    = base + 3   ; Holds general purpose memory Address
+strptr  = base + 1      ; Holds address string buf for printing
+addr    = base + 3      ; Holds general purpose memory Address
 
-buf_index = $49
-input_buf = $50
-input_buf_size = $20
+CHAR_IN = $ff
+
+;input_buf_size = $20
 
 ; Some helper macros
 
 ; I wish there were PHX, PHY etc!
 
 !macro PHX {
-    sta tmp0
+    sta tmp_p
     txa
     pha
-    lda tmp0
+    lda tmp_p
 }
 
 !macro PLX {
-    sta tmp0
+    sta tmp_p
     pla
     tax
-    lda tmp0
+    lda tmp_p
 }
  
 !macro PHY {
-    sta tmp0
+    sta tmp_p
     tya
     pha
-    lda tmp0
+    lda tmp_p
 }
 
 !macro PLY {
-    sta tmp0
+    sta tmp_p
     pla
     tay
-    lda tmp0
+    lda tmp_p
 }
  
 start       
             jsr pwelcome    ; print welcome message
 ;            jsr pstatus     ; print resister status
 
-            jsr pmemory
+            ;jsr pmemory
 
+            ; Load interrupt vector for monitor
+            lda #<break_into
+            sta $FFFE
+            lda #>break_into
+            sta $FFFF
+            
+            cli     ; Enable interrupts
+
+            brk     ; Jump into the monitor
+            rts     ; Should never get here
+            
             ; Command Loop
 
+break_into
+            ; Dump BRK context so can report it
+            stx x_store     ; Store X
+            tsx             ; Stack pointer to X
+            stx sp_store    ; Store it
+
+            sta a_store     ; Store A
+            pla             ; SR
+            sta sr_store    ; store it
+            pla             ; PCL
+            sta pcl_store   ; store it
+            pla             ; PCH 
+            sta pch_store   ; store it
+            sty y_store     ; Don't forget Y!
+
+            cli             ; Re-enable interrupts  (RTI would normally do this for us)
+
+    
+            jsr pstatus     ; Print stored status
+            
+            ; Top of main command loop
+            
+reset_command_loop
+            
+            ldx #$00        ; zero terminate buffer
+            stx input_buf   
+            stx buf_index   ; zero buffer index
+            
 command_loop
             ; Loop collecting characters until return/enter is pressed
 
-            jsr gchar           ; Get latest char from input
-            beq command_loop    ; 0 indicates no new char
+            ;jsr gchar           ; A <-- latest char from input
+            lda CHAR_IN
+            beq command_loop    ; 0 indicates no new char, loop.
             
-            cmp #$13            ; Check for RETURN
+            cmp #$0D            ; Check for RETURN
             beq RETURN
-            ldy buf_index
-            iny
-            sta input_buf,y
-            sty buf_index
-            jmp command_loop
+            
+            jsr pchar           ; echo character
+            ldy buf_index       ; Load buffer index
+            sta input_buf,y     ; Store char in buffer
+            iny                 ; Increase buffer index for next character
+            sty buf_index       ; Store buffer index
+            
+            jmp command_loop    ; Loop for next character
 
 RETURN
-
+            
             ; Zero terminate buffer
-            ldy buf_index
-            iny
+            ldy buf_index           ; Current buffer index
+            beq reset_command_loop  ; If buffer is empty, loop
             lda #$00
-            sta input_buf,y
+            sta input_buf,y         ; Store 0
 
-            lda #<input_buf
-            sta strptr
-            lda #>input_buf
-            sta strptr + 1
+            ; output newline
+            lda #$0A
+            jsr pchar
+            
+            ;lda #<input_buf
+            ;sta strptr
+            ;lda #>input_buf
+            ;sta strptr + 1
+                        
+            ;jsr pstr
 
-            jsr pstr 
+            ;lda #$0A
+            ;jsr pchar
+            
+            ; Command processing
+            
+            lda input_buf       ; get first character
+            
+            cmp #'x'            ; x to exit
+            bne +
+            rts
+
++           cmp #'r'
+            bne +
+            jsr pstatus
+            
+                
+
+ 
++           jmp reset_command_loop
             
             
 exit            
@@ -121,7 +187,7 @@ pmemory     ; Print memory to screen
             
             rts
             
-pwelcome
+pwelcome    ; Print welcome message
             lda #<welcome
             sta strptr
             lda #>welcome
@@ -213,36 +279,78 @@ dump8bytes  ; Dump 8 bytes memory to screen
             
 pstatus     ; Print register etc. status
 
-            lda #<shead
+            ; PC   SR   AC   XR    YR   SP
+            ; xxxx xx   xx   xx    xx   xx
+            lda #<shead             ; print out header
             sta strptr
             lda #>shead
             sta strptr + 1
-
             jsr pstr 
-
+            
             ; PC
-            ; ??
             
-            ; Stack Register
-;            tsx
-            txa
-            
-            
-            ; Format as hex string into strbuf
+            lda pch_store
             jsr fhex2
-            
-            ; Print SR value
-            lda #<strbuf
-            sta strptr
-            lda #>strbuf
-            sta strptr + 1
+            jsr pstrbuf 
 
-            jsr pstr 
-         
+            lda pcl_store
+            jsr fhex2
+            jsr pstrbuf 
+
+            ldy #02
+            jsr pspace
+            
+            ; SR
+            
+            lda sr_store
+            jsr fhex2
+            jsr pstrbuf 
+
+            ldy #03
+            jsr pspace
+            
+            ; A
+
+            lda a_store
+            jsr fhex2
+            jsr pstrbuf 
+
+            ldy #02
+            jsr pspace
+
+
+            ; X
+
+            lda x_store
+            jsr fhex2
+            jsr pstrbuf 
+
+            lda #' '
+            jsr pchar
+
+            ; Y
+
+            lda y_store
+            jsr fhex2
+            jsr pstrbuf 
+
+            lda #' '
+            jsr pchar
+            
+            ; SP
+
+            lda sp_store
+            jsr fhex2
+            jsr pstrbuf 
+            
+            
+            lda #$0A            ; Newline
+            jsr pchar
+            
             rts
             
 
-;
+; Print out string pointed to by (strptr)
             
 pstr
             +PHY   ; push Y onto stack so we can restore it later
@@ -260,6 +368,15 @@ pstr
             
             rts
 
+pstrbuf
+
+            lda #<strbuf
+            sta strptr
+            lda #>strbuf
+            sta strptr + 1
+            jsr pstr 
+            rts
+            
 pchar
 
             sta $fd
@@ -308,9 +425,49 @@ chex        ; Map number to hex digit
             +PLY
             
             rts            
-    
+
+fillmem     ; Fill memory with Y bytes of A, starting at (strptr)
+            cpy #00         ; Check if Y is zero
+            beq +           ; Exit if it is
+            
+            dey             ; Decrease Y so can use it as an index,
+                            ; e.g. if write 4 bytes, then start at index 3
+            sta (strptr),y  ; Write byte, doesn't affect Z flag
+            beq +           ; If Y is 0, exit.
+            jmp fillmem     ; Loop
++           rts
+            
+pspace      ; Print out Y spaces
+            lda #' '
+            jsr pchar
+            dey
+            bne pspace
++           rts
+            
+; Data Section
+
+x_store      !fill 1
+y_store      !fill 1
+sp_store     !fill 1
+a_store      !fill 1
+sr_store     !fill 1
+pcl_store    !fill 1
+pch_store    !fill 1
+
+tmp_p   !fill 1
+PCH     !fill 1
+PCL     !fill 1
+SR      !fill 1
+AC      !fill 1
+XR      !fill 1
+YR      !fill 1
+SP      !fill 1
+
+buf_index   !fill 1
+input_buf   !fill 40
+           
 welcome !raw 0x0a, "Welcome to BurloMon v1.0", 0x0a, 0x0a, 0x00
-shead !raw "PC   SR   AC   XR    YR   SP", 0x0a, 0x00
+shead !raw " PC   SR   AC   XR    YR   SP", 0x0a, 0x00
 
 strbuf !raw "XXXXXXXXXXXXXXX", 0x00
 
